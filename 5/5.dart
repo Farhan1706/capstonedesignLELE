@@ -10,6 +10,24 @@
 // Pengaturan NTP dan data
 RTC_DS3231 rtc;
 
+// Firebase
+#include <Firebase_ESP_Client.h>
+#include "addons/TokenHelper.h" // Provide the token generation process info.
+#include "addons/RTDBHelper.h" // Provide the RTDB payload printing info and other helper functions.
+// FIREBASE SETUP
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+bool signupOK = false;
+#define API_KEY "AIzaSyB8vZQNPFB3HUUy06Cm4HNI87SS-f6-riY"
+#define DATABASE_URL "https://coba-c7eac-default-rtdb.firebaseio.com/"
+void firebaseSetInt(String, int);
+void firebaseSetFloat(String, float);
+void firebaseSetString(String databaseDirectory, String value);
+String firebaseGetString(String databaseDirectory);
+String device_root = "/";
+
+
 // Konfigurasi Servo
 const int servoPin = 25; // Pin Servo diperbarui
 Servo servo1;
