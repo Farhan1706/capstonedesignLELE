@@ -17,8 +17,8 @@ FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 bool signupOK = false;
-#define API_KEY "AIzaSyB8vZQNPFB3HUUy06Cm4HNI87SS-f6-riY"
-#define DATABASE_URL "https://coba-c7eac-default-rtdb.firebaseio.com/"
+#define API_KEY "AIzaSyDnoJO-BrVCBfJMHEAo1uTuBUw86IrzGIA"
+#define DATABASE_URL "https://pakanlele-92a8f-default-rtdb.firebaseio.com/"
 void firebaseSetInt(String, int);
 void firebaseSetString(String, String);
 int firebaseGetInt(String);
