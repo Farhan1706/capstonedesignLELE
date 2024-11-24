@@ -1,13 +1,10 @@
-#include <Wire.h>
-#include <RTClib.h>
-#include <WiFi.h>
-#include <WiFiManager.h>
-#include <time.h>
 #include <ESP32Servo.h>
 #include "HX711.h"
 #include <Stepper.h>
-
-// Firebase
+#include <time.h>
+#include <Wire.h>
+#include "RTClib.h"
+#include <WiFiManager.h>
 #include <Firebase_ESP_Client.h>
 #include "addons/TokenHelper.h"
 #include "addons/RTDBHelper.h"
@@ -16,7 +13,6 @@
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
-bool signupOK = false;
 #define API_KEY "AIzaSyDnoJO-BrVCBfJMHEAo1uTuBUw86IrzGIA"
 #define DATABASE_URL "https://pakanlele-92a8f-default-rtdb.firebaseio.com/"
 void firebaseSetInt(String, int);
@@ -24,13 +20,14 @@ void firebaseSetString(String, String);
 int firebaseGetInt(String);
 String firebaseGetString(String);
 
-// Konfigurasi perangkat
-RTC_DS3231 rtc;
+// Konfigurasi pin
+const int LOADCELL_DOUT_PIN = 33; // Pin data HX711
+const int LOADCELL_SCK_PIN = 32;  // Pin clock HX711
+HX711 scale;
 const int servoPin = 25;
 Servo servo1;
-const int LOADCELL_DOUT_PIN = 33;
-const int LOADCELL_SCK_PIN = 32;
-HX711 scale;
+
+// Stepper
 const int stepsPerRevolution = 2048;
 #define IN1 13
 #define IN2 12
@@ -38,152 +35,138 @@ const int stepsPerRevolution = 2048;
 #define IN4 27
 Stepper myStepper(stepsPerRevolution, IN1, IN3, IN2, IN4);
 
-int jumlahIkan = 100;         // Nilai default
-int stokPakan = 20;           // Variabel untuk stok pakan
-int pemberianPakan = 0;       // Status pemberian pakan
+// Faktor kalibrasi load cell
+const float calibration_factor = 256.63;
 
-int jam, menit, detik, hari, bulan, tahun;
-int startDay = 14, startMonth = 11, startYear = 2024;
+// RTC
+RTC_DS3231 rtc;
+
+// Variabel utama
+int stokPakan = 0;
+int jumlahIkan = 100;
+int startYear, startMonth, startDay;
 
 void setup() {
   Serial.begin(115200);
 
-  // Inisialisasi RTC
+  // Koneksi Wi-Fi
+  connectWiFi();
+
+  // Firebase setup
+  setupFirebase();
+
+  // RTC setup
   if (!rtc.begin()) {
-    Serial.println("RTC tidak ditemukan!");
+    Serial.println("RTC tidak terdeteksi!");
     while (1);
   }
 
-  // Inisialisasi Servo
+  // Servo
   servo1.attach(servoPin);
   servo1.write(0);
 
-  // Inisialisasi Loadcell
+  // Load Cell
   scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-  scale.set_scale(256.63);
+  scale.set_scale(calibration_factor);
   scale.tare();
 
-  // Inisialisasi Stepper
+  // Stepper
   myStepper.setSpeed(10);
 
-  // Sambungan awal ke Wi-Fi
-  connectWiFi();
+  // Ambil data awal dari Firebase
+  String jumlahIkanString;
 
-  // Firebase
-  setupFirebase();
+  // Ambil data dari Firebase
+  if (Firebase.RTDB.getString(&fbdo, "/jumlahIkan")) {
+      jumlahIkanString = fbdo.stringData();
+      jumlahIkanString.replace("\"", ""); // Hapus petik
+      jumlahIkan = jumlahIkanString.toInt(); // Konversi menjadi integer
+      
+      Serial.print("Jumlah ikan: ");
+      Serial.println(jumlahIkan);
+  } else {
+      Serial.print("Gagal mendapatkan data jumlah ikan: ");
+      Serial.println(fbdo.errorReason());
+  }
 
-  // Sinkronisasi waktu
-  sinkronisasiWaktu();
+  String startAlat = firebaseGetString("startAlat");
+  parseStartDate(startAlat);
 }
 
 void loop() {
   DateTime now = rtc.now();
-  jam = now.hour();
-  menit = now.minute();
-  detik = now.second();
-  hari = now.day();
-  bulan = now.month();
-  tahun = now.year();
+  int hariBerjalan = (now - DateTime(startYear, startMonth, startDay)).days();
+  int jam = now.hour();
+  int menit = now.minute();
+  int detik = now.second();
 
-  // Periksa dan lakukan pemberian pakan manual dari Firebase
-  if (firebaseGetString("beriPakan") == "1") {
-    int pakanGram = hitungPakan(jumlahIkan);
-    beriPakan(pakanGram);
-    firebaseSetString("beriPakan", "0"); // Kembali ke status default
+  // Pemberian Pakan Otomatis
+  if ((jam == 9 || jam == 15 || jam == 21 || (jam == 0 && menit == 1)) && detik == 0) {
+    int pemberianPakan = (jam == 9) ? 1 : (jam == 15) ? 2 : (jam == 21) ? 3 : 4;
+    firebaseSetInt("pemberianPakan", pemberianPakan);
+
+    int totalPakan = hitungPakan(jumlahIkan);
+    beriPakan(totalPakan);
   }
 
-  // Update jumlah ikan dari Firebase
-  jumlahIkan = firebaseGetInt("jumlahIkan");
+  // Pemberian Pakan Manual
+  if (firebaseGetString("beriPakan") == "1") {
+    int totalPakan = hitungPakan(jumlahIkan);
+    beriPakan(totalPakan);
+    firebaseSetInt("beriPakan", 0); // Reset beriPakan
+  }
 
-  // Update hari operasional alat
-  firebaseSetInt("hariAlat", hitungHariOperasional());
+  // Update hari alat ke Firebase
+  firebaseSetInt("hariAlat", hariBerjalan);
 
-  // Update stok pakan
+  // Update stok pakan ke Firebase
   firebaseSetInt("stokPakan", stokPakan);
 
-  // Update pemberian pakan berdasarkan waktu
-  if (jam == 10 && menit == 0 && detik == 0) {
-    pemberianPakan = 1;
-  } else if (jam == 15 && menit == 0 && detik == 0) {
-    pemberianPakan = 2;
-  } else if (jam == 20 && menit == 0 && detik == 0) {
-    pemberianPakan = 3;
-  } else if (jam == 23 && menit == 59 && detik == 59) {
-    pemberianPakan = 0; // Reset di malam hari
-  }
-  firebaseSetInt("pemberianPakan", pemberianPakan);
-
-  if (detik == 0 || detik == 31) {
-    int pakanGram = hitungPakan(jumlahIkan);  // Tentukan gramasi sesuai hari operasional
-    beriPakan(pakanGram);           // Lakukan proses pemberian pakan
-  }
-
-  // Cek jika waktu saat ini pukul 11:30 malam, coba hubungkan ke Wi-Fi untuk sinkronisasi
-  if (jam == 23 && menit == 30 && !WiFi.isConnected()) {
-    sinkronisasiSiap = true;
-    connectWiFi();
-  }
-
-  // Sinkronisasi pada RTC tepat pukul 12:00:00
-  if (jam == 0 && menit == 0 && now.second() == 0 && sinkronisasiSiap && WiFi.isConnected()) {
-    sinkronisasiWaktu();
-    sinkronisasiSiap = false; // Set ulang penanda setelah sinkronisasi
-  }
-
-  delay(500);
+  delay(1000);
 }
 
-// Fungsi Firebase
-void setupFirebase() {
-  config.api_key = API_KEY;
-  config.database_url = DATABASE_URL;
-  Firebase.begin(&config, &auth);
-  Firebase.reconnectWiFi(true);
-}
+void beriPakan(int gram) {
+  Serial.println("Proses pemberian pakan dimulai...");
+  servo1.write(18);
+  delay(1000);
 
-int firebaseGetInt(String databaseDirectory) {
-  if (Firebase.RTDB.getInt(&fbdo, databaseDirectory)) {
-    return fbdo.intData();
-  } else {
-    Serial.println(fbdo.errorReason());
-    return 0; // Nilai default jika gagal
+  bool beratCukup = false;
+  while (!beratCukup) {
+    float beratSaatIni = scale.get_units(10);
+    if (beratSaatIni >= gram) beratCukup = true;
   }
+
+  servo1.write(0);
+  delay(1000);
+
+  kosongkanTempatPakan();
+  Serial.println("Pemberian pakan selesai.");
 }
 
-String firebaseGetString(String databaseDirectory) {
-  if (Firebase.RTDB.getString(&fbdo, databaseDirectory)) {
-    return fbdo.stringData();
-  } else {
-    Serial.println(fbdo.errorReason());
-    return ""; // Nilai default jika gagal
+void kosongkanTempatPakan() {
+  unsigned long startTime = millis();
+  bool pembersihanSelesai = false;
+
+  while (!pembersihanSelesai) {
+    float beratSaatIni = scale.get_units();
+    if (beratSaatIni > 8) {
+      myStepper.step(stepsPerRevolution / 10);
+      startTime = millis();
+    } else if (millis() - startTime < 15000) {
+      myStepper.step(stepsPerRevolution / 10);
+    } else {
+      pembersihanSelesai = true;
+    }
   }
-}
-
-void firebaseSetInt(String databaseDirectory, int value) {
-  if (!Firebase.RTDB.setInt(&fbdo, databaseDirectory, value)) {
-    Serial.println("Gagal mengirim data: " + fbdo.errorReason());
+  if (pembersihanSelesai) {
+    myStepper.step(0); // Pastikan motor berhenti
   }
-}
-
-void firebaseSetString(String databaseDirectory, String value) {
-  if (!Firebase.RTDB.setString(&fbdo, databaseDirectory, value)) {
-    Serial.println("Gagal mengirim data: " + fbdo.errorReason());
-  }
-}
-
-// Fungsi untuk menghitung hari operasional alat
-int hitungHariOperasional() {
-  DateTime now = rtc.now();
-  return (now - DateTime(startYear, startMonth, startDay)).days();
+  myStepper.step(0);
 }
 
 int hitungPakan(int jumlahIkan) {
   DateTime now = rtc.now();
   int hariBerjalan = (now - DateTime(startYear, startMonth, startDay)).days();
-  Serial.print("Hari Berjalan:");
-  Serial.println(hariBerjalan);
-
-  // Tentukan berat ikan per ekor berdasarkan hari operasional
   float beratIkan = (hariBerjalan <= 10) ? 1 : 
                     (hariBerjalan <= 20) ? 2 : 
                     (hariBerjalan <= 40) ? 3.5 : 
@@ -193,7 +176,6 @@ int hitungPakan(int jumlahIkan) {
                     (hariBerjalan <= 80) ? 75 : 
                     (hariBerjalan <= 120) ? 90 : 100;
 
-  // Tentukan persentase pakan berdasarkan hari operasional
   float persentasePakan = (hariBerjalan <= 10) ? 0.10 : 
                           (hariBerjalan <= 20) ? 0.09 : 
                           (hariBerjalan <= 40) ? 0.07 : 
@@ -203,65 +185,47 @@ int hitungPakan(int jumlahIkan) {
                           (hariBerjalan <= 80) ? 0.037 : 
                           (hariBerjalan <= 120) ? 0.025 : 0.02;
 
-  // Hitung jumlah pakan per ikan
   float pakanPerIkan = beratIkan * persentasePakan;
-
-  // Total pakan untuk semua ikan
-  int totalPakan = pakanPerIkan * jumlahIkan;
-  return totalPakan;
+  return pakanPerIkan * jumlahIkan;
 }
 
-// Fungsi pemberian pakan
-void beriPakan(int gram) {
-  servo1.write(18);
-  delay(1000);
-  while (scale.get_units() < gram) {
-    delay(100);
-  }
-  servo1.write(0);
-  delay(1000);
-  kosongkanTempatPakan();
+void parseStartDate(String startAlat) {
+  startAlat.replace("\"", "");
+  startAlat.replace("\\", "");
+  int firstSlash = startAlat.indexOf('/');
+  int secondSlash = startAlat.lastIndexOf('/');
+
+  startDay = startAlat.substring(0, firstSlash).toInt();
+  startMonth = startAlat.substring(firstSlash + 1, secondSlash).toInt();
+  startYear = startAlat.substring(secondSlash + 1).toInt();
 }
 
-void kosongkanTempatPakan() {
-  unsigned long startTime = millis(); // Catat waktu mulai
-  bool pembersihanSelesai = false;
-
-  while (!pembersihanSelesai) {
-    float beratSaatIni = scale.get_units(); // Baca berat
-    Serial.print("Berat saat ini: ");
-    Serial.println(beratSaatIni);
-
-    // Jika berat > 8 gram, terus gerakkan motor
-    if (beratSaatIni > 8) {
-      myStepper.step(stepsPerRevolution / 10); // Jalankan stepper
-      startTime = millis(); // Reset waktu saat berat masih tinggi
-    } else {
-      // Berat sudah ≤ 8 gram, periksa waktu
-      if (millis() - startTime < 15000) {
-        myStepper.step(stepsPerRevolution / 10); // Motor tetap bergerak
-      } else {
-        pembersihanSelesai = true; // Selesaikan proses setelah 15 detik
-      }
-    }
-
-    delay(100); // Beri jeda antar pembacaan
-  }
-
-  myStepper.step(0); // Hentikan motor setelah pembersihan selesai
+void setupFirebase() {
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
 }
 
-// Fungsi untuk koneksi Wi-Fi
+String firebaseGetString(String databaseDirectory) {
+  if (Firebase.RTDB.getString(&fbdo, databaseDirectory)) return fbdo.stringData();
+  return "";
+}
+
+int firebaseGetInt(String databaseDirectory) {
+  if (Firebase.RTDB.getInt(&fbdo, databaseDirectory)) return fbdo.intData();
+  return 0;
+}
+
+void firebaseSetInt(String databaseDirectory, int value) {
+  Firebase.RTDB.setInt(&fbdo, databaseDirectory, value);
+}
+
+void firebaseSetString(String databaseDirectory, String value) {
+  Firebase.RTDB.setString(&fbdo, databaseDirectory, value);
+}
+
 void connectWiFi() {
   WiFiManager wifiManager;
-  if (WiFi.status() == WL_CONNECTED) return;
   wifiManager.autoConnect("Alat Pakan Lele");
-}
-
-// Sinkronisasi waktu dengan NTP
-void sinkronisasiWaktu() {
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) return;
-  rtc.adjust(DateTime(timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec));
 }
