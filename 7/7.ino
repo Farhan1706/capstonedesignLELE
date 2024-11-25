@@ -369,6 +369,7 @@ int hitungPakan(int jumlahIkan) {
 }
 
 void parseStartDate(String startAlat) {
+    String startDate = firebaseGetString("startAlat");
   // Hilangkan tanda kutip jika ada
     startDate.replace("\"", ""); // Remove double quotes
 
@@ -416,41 +417,80 @@ void firebaseSetString(String databaseDirectory, String value) {
   Firebase.RTDB.setString(&fbdo, databaseDirectory, value);
 }
 
-
-// Kode Wifi Lama
+//Connect baru
 void connectWiFi() {
+  // Membuat objek WiFiManager
   WiFiManager wifiManager;
 
-  // Nama Access Point WiFi Manager
-  String apName = "PakanLele_AP";
-  
-  // Konfigurasi ulang jika tidak ada koneksi Wi-Fi
-  if (!wifiManager.autoConnect(apName.c_str())) {
-    Serial.println("Gagal terhubung ke Wi-Fi. Mode Access Point diaktifkan.");
-    delay(1000);
-
-    // WiFiManager akan tetap berjalan dalam mode AP sampai pengguna memasukkan kredensial Wi-Fi baru
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
-    }
-  } else {
-    Serial.println("Terhubung ke Wi-Fi!");
-    // configTime(25200, 0, "0.id.pool.ntp.org");
+  // Jika sudah terhubung ke Wi-Fi, lewati proses koneksi ulang
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("Sudah terhubung ke Wi-Fi");
+    return;
   }
 
-  // Cek status koneksi
+  // Coba hubungkan ke Wi-Fi menggunakan WiFiManager
+  Serial.println("Menghubungkan ke Wi-Fi menggunakan WiFiManager...");
+  if (!wifiManager.autoConnect("AlatPakanLele_AP")) {  // Nama AP mode jika Wi-Fi gagal
+    Serial.println("Gagal terhubung ke Wi-Fi. Mode AP diaktifkan.");
+    delay(1000);
+    return;  // Keluar dari fungsi jika koneksi gagal
+  }
+
+  // Jika berhasil terhubung, tampilkan alamat IP
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("Koneksi Wi-Fi berhasil!");
-    Serial.print("IP Address: ");
+    Serial.println("Terhubung ke Wi-Fi");
+    Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+
+    // Sinkronkan waktu menggunakan NTP
+    Serial.println("Menyinkronkan waktu dengan NTP...");
+    configTime(25200, 0, "0.id.pool.ntp.org");  // Atur offset waktu (25200 detik untuk WIB)
+    struct tm timeInfo;
+    if (getLocalTime(&timeInfo)) {
+      Serial.println("Waktu berhasil disinkronkan!");
+      Serial.printf("Waktu lokal: %s\n", asctime(&timeInfo));
+    } else {
+      Serial.println("Gagal menyinkronkan waktu.");
+    }
   } else {
-    Serial.println("Masih dalam mode Access Point.");
+    Serial.println("Koneksi Wi-Fi gagal. Tetap dalam mode AP.");
   }
 }
 
+// Kode Wifi Lama
+// void connectWiFi() {
+//   WiFiManager wifiManager;
+
+//   // Nama Access Point WiFi Manager
+//   String apName = "PakanLele_AP";
+  
+//   // Konfigurasi ulang jika tidak ada koneksi Wi-Fi
+//   if (!wifiManager.autoConnect(apName.c_str())) {
+//     Serial.println("Gagal terhubung ke Wi-Fi. Mode Access Point diaktifkan.");
+//     delay(1000);
+
+//     // WiFiManager akan tetap berjalan dalam mode AP sampai pengguna memasukkan kredensial Wi-Fi baru
+//     while (WiFi.status() != WL_CONNECTED) {
+//       delay(500);
+//       Serial.print(".");
+//     }
+//   } else {
+//     Serial.println("Terhubung ke Wi-Fi!");
+//     // configTime(25200, 0, "0.id.pool.ntp.org");
+//   }
+
+//   // Cek status koneksi
+//   if (WiFi.status() == WL_CONNECTED) {
+//     Serial.println("Koneksi Wi-Fi berhasil!");
+//     Serial.print("IP Address: ");
+//     Serial.println(WiFi.localIP());
+//   } else {
+//     Serial.println("Masih dalam mode Access Point.");
+//   }
+// }
+
 // Fungsi untuk sinkronisasi waktu dengan NTP dan menyimpan ke RTC
-void sinkronisasiWaktu() {
+vvoid sinkronisasiWaktu() {
   struct tm timeinfo;
   
   if (!getLocalTime(&timeinfo)) {
@@ -464,7 +504,7 @@ void sinkronisasiWaktu() {
 }
 
 int getJumlahIkanFromFirebase() {
-  String jumlahIkanStr = firebaseGetString(databaseDirectory); // Ambil data dari Firebase
+  String jumlahIkanStr = firebaseGetString("startAlat"); // Ambil data dari Firebase
   if (jumlahIkanStr.length() > 0) {
     // Hilangkan karakter tambahan seperti backslash (\) dan tanda kutip ganda (")
     jumlahIkanStr.replace("\\", "");   // Hapus backslash
