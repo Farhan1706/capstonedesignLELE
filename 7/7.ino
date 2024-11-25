@@ -100,7 +100,7 @@ void setup() {
 
   if (rtc.lostPower()) {
     Serial.println("RTC kehilangan daya. Mengatur ulang waktu ke waktu kompilasi.");
-    rtc.adjust(DateTime(F(_DATE), F(TIME_))); // Set waktu ke waktu kompilasi
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
   }
 
   // Ambil data awal dari Firebase
