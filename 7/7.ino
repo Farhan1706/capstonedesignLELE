@@ -490,7 +490,7 @@ void connectWiFi() {
 // }
 
 // Fungsi untuk sinkronisasi waktu dengan NTP dan menyimpan ke RTC
-vvoid sinkronisasiWaktu() {
+void sinkronisasiWaktu() {
   struct tm timeinfo;
   
   if (!getLocalTime(&timeinfo)) {
