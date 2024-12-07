@@ -133,9 +133,9 @@ void loop() {
   int detik = now.second();
 
   if (modeOffline) {
-    jalankanModeOffline(hariBerjalan);
+    jalankanModeOffline(hariBerjalan, jam, menit, detik);
   } else {
-    jalankanModeOnline(hariBerjalan);
+    jalankanModeOnline(hariBerjalan, jam, menit, detik);
   }
 
 
@@ -289,15 +289,6 @@ void setupFirebase() {
   } else {
     Serial.printf("Gagal setup Firebase: %s\n", config.signer.signupError.message.c_str());
   }
-}
-
-void parseStartDate(String startAlat) {
-  // Parsing tanggal dari Firebase
-  startAlat.replace("\"", "");
-  startAlat.replace("\\/", "/");
-  startDay = startAlat.substring(0, 2).toInt();
-  startMonth = startAlat.substring(3, 5).toInt();
-  startYear = startAlat.substring(6, 10).toInt();
 }
 
 void beriPakan(int gram) {
