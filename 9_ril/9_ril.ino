@@ -8,19 +8,16 @@
 #include "addons/RTDBHelper.h"
 #include "RTClib.h"
 #include <WiFi.h>
-#include <Preferences.h>  // Tambahkan library Preferences
+#include <ESP32Ping.h>
+#include <Preferences.h>
 
-// System SETUP
+// Sistem Setup
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 bool signupOK = false;
 #define API_KEY "AIzaSyDnoJO-BrVCBfJMHEAo1uTuBUw86IrzGIA"
 #define DATABASE_URL "https://pakanlele-92a8f-default-rtdb.firebaseio.com/"
-void firebaseSetInt(String, int);
-void firebaseSetString(String, String);
-int firebaseGetInt(String);
-String firebaseGetString(String);
 const char* ssid = "TBM LITERASI_plus";
 const char* password = "marimembaca21";
 
@@ -49,50 +46,44 @@ RTC_DS3231 rtc;
 Preferences prefs;
 
 // Variabel utama
-int stokPakan = 0;
+int stokPakan;
 int jumlahIkan = 100;
-int startYear=0, startMonth=0, startDay=0;
-bool sinkronisasiSiap = false;
-
+int startYear = 0, startMonth = 0, startDay = 0;
+bool internetTerhubung = false; // Status internet
+unsigned long lastInternetCheck = 0; // Waktu pengecekan internet terakhir (ms)
+bool modeOffline = true; // Default ke ModeOffline
 
 void setup() {
   Serial.begin(115200);
 
-  // Inisialisasi Preferences untuk menyimpan tanggal dan jumlah ikan
+  // Inisialisasi Preferences
   prefs.begin("startDate", false);
 
-  // Cek apakah tanggal sudah ada di memori
   if (prefs.isKey("startDay") && prefs.isKey("startMonth") && prefs.isKey("startYear")) {
-    // Ambil tanggal dari NVS jika tersedia
     startDay = prefs.getInt("startDay");
     startMonth = prefs.getInt("startMonth");
     startYear = prefs.getInt("startYear");
-    jumlahIkan = prefs.getInt("jumlahIkan");  // Ambil jumlah ikan dari Preferences
-    Serial.println("Loaded start date and jumlah ikan from NVS:");
-    Serial.print("Start Day (from Preferences): ");
-    Serial.println(startDay);
-    Serial.print("Start Month (from Preferences): ");
-    Serial.println(startMonth);
-    Serial.print("Start Year (from Preferences): ");
-    Serial.println(startYear);
-    Serial.print("Jumlah Ikan (from Preferences): ");
-    Serial.println(jumlahIkan);
+    jumlahIkan = prefs.getInt("jumlahIkan");
+    Serial.println("Dapat start date dan jumlahIkan dari Preferences.");
   } else {
-    Serial.println("No start date found in NVS.");
+    Serial.println("Tidak ada data pada Preferences.");
   }
 
   pinMode(TRIGGER_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
 
-  // Koneksi Wi-Fi
   connectWiFi();
-  sinkronisasiWaktu();
-
-  // Firebase setup
-  setupFirebase();
-  config.database_url = DATABASE_URL;
-  Firebase.begin(&config, &auth);
-  Firebase.reconnectWiFi(true);
+  if (internetTerhubung) {
+    setupFirebase();
+    config.database_url = DATABASE_URL;
+    Firebase.begin(&config, &auth);
+    Firebase.reconnectWiFi(true);
+    modeOffline = false;
+    jumlahIkan = getJumlahIkanFromFirebase();
+    prefs.putInt("jumlahIkan", jumlahIkan);
+    String startAlat = firebaseGetString("startAlat");
+    parseStartDate(startAlat);
+  }
 
   // RTC setup
   if (!rtc.begin()) {
@@ -105,120 +96,34 @@ void setup() {
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
   }
 
-  // Ambil data awal dari Firebase
-  // Mendapatkan jumlah ikan dari Firebase dan menyimpannya di Preferences
-  String jumlahIkanString;
-  jumlahIkan = getJumlahIkanFromFirebase();
-  Serial.println(jumlahIkan);
-
-  // Jika gagal mendapatkan jumlah ikan, gunakan nilai default
-  if (jumlahIkan == 0) {
-      Serial.println("Gagal mengambil jumlah ikan dari Firebase. Menggunakan nilai default.");
-      jumlahIkan = 100; // Default fallback value
-  }
-
-  // Menyimpan jumlah ikan ke Preferences
-  prefs.putInt("jumlahIkan", jumlahIkan);
-  Serial.println("Jumlah ikan yang digunakan:");
-  Serial.println(jumlahIkan);
-
-
-  // Servo
   servo1.attach(servoPin);
   servo1.write(0);
 
-  // Load Cell
   scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
   scale.set_scale(calibration_factor);
   scale.tare();
 
-  // Stepper
   myStepper.setSpeed(10);
-
-
-  String startAlat = firebaseGetString("startAlat");
-  parseStartDate(startAlat);
 }
 
 void loop() {
-  // Mengukur jarak menggunakan sensor ultrasonik
-  long jarak = readUltrasonicDistance();
-  
-  // Menghitung ketersediaan pakan berdasarkan jarak
-  int ketersediaanPakan = hitungKetersediaanPakan(jarak);
-  
-  // Menampilkan hasil pengukuran jarak dan ketersediaan pakan
-  Serial.print("Jarak dari sensor ultrasonik: ");
-  Serial.print(jarak);
-  Serial.print(" cm, Ketersediaan Pakan: ");
-  Serial.print(ketersediaanPakan);
-  Serial.println("%");
-  firebaseSetInt("stokPakan", ketersediaanPakan);
+  // Periksa koneksi internet setiap 5 menit
+  if (millis() - lastInternetCheck > 300000) { // Setiap 5 menit
+    internetTerhubung = checkInternetConnection();
+    lastInternetCheck = millis();
+    if (internetTerhubung) {
+      Serial.println("Koneksi internet berhasil. Beralih ke ModeOnline.");
+      modeOffline = false;
+      setupFirebase();
+    } else {
+      Serial.println("Koneksi internet gagal. Tetap di ModeOffline.");
+      modeOffline = true;
+    }
+  }
 
-  // Get string from Firebase
-  String startDate = firebaseGetString("startAlat"); // Firebase returns in format "20\\/11\\/2024"
-  if (startDate.length() > 0) {
-    // Hilangkan tanda kutip jika ada
-    startDate.replace("\"", ""); // Remove double quotes
-
-    // Format dan cetak
-    startDate.replace("\\/", "/");  // Remove escape for '/'
-    startDate.replace("\\", "");    // Remove any backslashes (\\)
-
-    Serial.println("=== Data Tanggal dari Firebase ===");
-    Serial.print("Start Date: ");
-    Serial.println(startDate);
-
-    // Parse tanggal menjadi hari, bulan, tahun
-    startDay = startDate.substring(0, 2).toInt();
-    startMonth = startDate.substring(3, 5).toInt();
-    startYear = startDate.substring(6, 10).toInt();
-
-    // Print the parsed values from Firebase
-    Serial.print("Start Day (from Firebase): ");
-    Serial.println(startDay);
-    Serial.print("Start Month (from Firebase): ");
-    Serial.println(startMonth);
-    Serial.print("Start Year (from Firebase): ");
-    Serial.println(startYear);
-
-    // Simpan tanggal ke NVS
-    prefs.putInt("startDay", startDay);
-    prefs.putInt("startMonth", startMonth);
-    prefs.putInt("startYear", startYear);
-    prefs.putInt("jumlahIkan", jumlahIkan);
-    Serial.println("Start date saved to NVS.");
-
-    // Calculate the difference in days between the RTC date and the Firebase start date
-    DateTime now = rtc.now();
-    
-    // Calculate hari berjalan (difference in days)
-    DateTime startDateTime(startYear, startMonth, startDay); 
-    int hariBerjalan = (now - startDateTime).days();  // Hitung selisih hari
-    Serial.print("Hari Berjalan: ");
-    Serial.println(hariBerjalan);
-
-    // Print data from both Firebase and Preferences
-    Serial.println("\n----- Data from Firebase and Preferences -----");
-    Serial.print("Start Day (from Firebase): ");
-    Serial.println(startDay);
-    Serial.print("Start Month (from Firebase): ");
-    Serial.println(startMonth);
-    Serial.print("Start Year (from Firebase): ");
-    Serial.println(startYear);
-    Serial.print("Jumlah Ikan (from Firebase): ");
-    Serial.println(jumlahIkan);
-
-    Serial.print("Start Day (from Preferences): ");
-    Serial.println(prefs.getInt("startDay"));
-    Serial.print("Start Month (from Preferences): ");
-    Serial.println(prefs.getInt("startMonth"));
-    Serial.print("Start Year (from Preferences): ");
-    Serial.println(prefs.getInt("startYear"));
-    Serial.print("Jumlah Ikan (from Preferences): ");
-    Serial.println(prefs.getInt("jumlahIkan"));
-  } else {
-    Serial.println("Failed to get data from Firebase.");
+  // Sinkronisasi RTC jika online
+  if (!modeOffline && internetTerhubung) {
+    sinkronisasiWaktu();
   }
 
   DateTime now = rtc.now();
@@ -227,57 +132,172 @@ void loop() {
   int menit = now.minute();
   int detik = now.second();
 
-  // Pemberian Pakan Otomatis
-  if (detik == 0) {
-    int pemberianPakan = 4;
-
-    // Tentukan nilai pemberianPakan berdasarkan waktu
-    if (jam == 9) {
-        pemberianPakan = 1;
-    } else if (jam == 17) {
-        pemberianPakan = 2;
-    } else if (jam == 0 && menit == 5) {
-        pemberianPakan = 4;
-    }
-
-    // Kirim nilai pemberianPakan ke Firebase
-    if (pemberianPakan != 0) {
-        firebaseSetInt("pemberianPakan", pemberianPakan);
-
-        // Hanya memberikan pakan untuk nilai 1, 2, atau 3
-        if (pemberianPakan == 1 || pemberianPakan == 2 || pemberianPakan == 3) {
-            int totalPakan = hitungPakan(jumlahIkan);
-            beriPakan(totalPakan);
-        }
-    }
-  }
-  if (jam == 23 && menit == 30 && !WiFi.isConnected()) {
-    sinkronisasiSiap = true;
-    connectWiFi();
+  if (modeOffline) {
+    jalankanModeOffline(hariBerjalan);
+  } else {
+    jalankanModeOnline(hariBerjalan);
   }
 
-  // Sinkronisasi pada RTC tepat pukul 12:00:00
-  if (jam == 0 && menit == 0 && now.second() == 0 && sinkronisasiSiap && WiFi.isConnected()) {
-    sinkronisasiWaktu();
-    sinkronisasiSiap = false; // Set ulang penanda setelah sinkronisasi
-  }
 
-  // Pemberian Pakan Manual
-  String fnberiPakan = firebaseGetString("beriPakan");
-
-  if (fnberiPakan == "1") {
-    int totalPakan = hitungPakan(jumlahIkan);
-    beriPakan(totalPakan);
-    firebaseSetInt("beriPakan", 0); // Reset beriPakan
-  }
-
-  // Update hari alat ke Firebase
-  firebaseSetInt("hariAlat", hariBerjalan);
-
-  // Update stok pakan ke Firebase
-  firebaseSetInt("stokPakan", stokPakan);
 
   delay(1000);
+}
+
+void jalankanModeOffline(int hariBerjalan, int jam, int menit, int detik) {
+  Serial.println("== ModeOffline ==");
+  Serial.print("Hari Berjalan: ");
+  Serial.println(hariBerjalan);
+  jumlahIkan = prefs.getInt("jumlahIkan");
+
+  // Menggunakan data dari Preferences
+  Serial.printf("Preferences - Start Date: %02d/%02d/%04d, Jumlah Ikan: %d\n",
+              prefs.getInt("startDay"),
+              prefs.getInt("startMonth"),
+              prefs.getInt("startYear"),
+              jumlahIkan);
+
+  if (detik == 0) {
+    if ((jam == 9 && menit == 1) || (jam == 17 && menit == 1)) {
+      int totalPakan = hitungPakan(jumlahIkan);
+      beriPakan(totalPakan);
+    }
+  }
+
+  // Simulasi pemberian pakan (tidak menggunakan Firebase)
+  int totalPakan = hitungPakan(jumlahIkan);
+  beriPakan(totalPakan);
+}
+
+void jalankanModeOnline(int hariBerjalan, int jam, int menit, int detik) {
+  Serial.println("== ModeOnline ==");
+
+  // Update data ke Firebase
+  firebaseSetInt("hariAlat", hariBerjalan);
+
+  // Periksa apakah ada perintah pemberian pakan dari Firebase
+  String beriPakanCmd = firebaseGetString("beriPakan");
+  if (beriPakanCmd == "1") {
+    int totalPakan = hitungPakan(jumlahIkan);
+    beriPakan(totalPakan);
+    firebaseSetInt("beriPakan", 0); // Reset perintah
+  }
+
+  // Sinkronisasi start date dengan Firebase jika diperlukan
+  String startDate = firebaseGetString("startAlat");
+  if (startDate.length() > 0) {
+        // Hilangkan tanda kutip jika ada
+        startDate.replace("\"", ""); // Remove double quotes
+
+        // Format dan cetak
+        startDate.replace("\\/", "/");  // Remove escape for '/'
+        startDate.replace("\\", "");    // Remove any backslashes (\\)
+
+        Serial.println("=== Data Tanggal dari Firebase ===");
+        Serial.print("Start Date: ");
+        Serial.println(startDate);
+
+        // Parse tanggal menjadi hari, bulan, tahun
+        startDay = startDate.substring(0, 2).toInt();
+        startMonth = startDate.substring(3, 5).toInt();
+        startYear = startDate.substring(6, 10).toInt();
+
+        // Print the parsed values from Firebase
+        Serial.printf("Start Date (from Firebase): %02d/%02d/%04d\n", startDay, startMonth, startYear);
+
+        // Simpan tanggal ke NVS
+        prefs.putInt("startDay", startDay);
+        prefs.putInt("startMonth", startMonth);
+        prefs.putInt("startYear", startYear);
+        prefs.putInt("jumlahIkan", jumlahIkan);
+        Serial.println("Tanggal disimpan ke NVS.");
+
+        // Calculate the difference in days between the RTC date and the Firebase start date
+        DateTime now = rtc.now();
+        
+        // Calculate hari berjalan (difference in days)
+        DateTime startDateTime(startYear, startMonth, startDay); 
+        int hariBerjalan = (now - startDateTime).days();  // Hitung selisih hari
+        Serial.print("Hari Berjalan: ");
+        Serial.println(hariBerjalan);
+
+        // Print data from both Firebase and Preferences
+        Serial.println("\n----- Data from Firebase and Preferences -----");
+        // Print the parsed values from Firebase in one line
+        Serial.printf("Start Date (from Firebase): %02d/%02d/%04d\n", startDay, startMonth, startYear);
+
+        Serial.printf("Preferences - Start Date: %02d/%02d/%04d, Jumlah Ikan: %d\n",
+              prefs.getInt("startDay"),
+              prefs.getInt("startMonth"),
+              prefs.getInt("startYear"),
+              prefs.getInt("jumlahIkan"));
+      }
+
+      if (detik == 0) {
+        int pemberianPakan;
+        if (jam == 9) {
+          pemberianPakan = 1;
+        } else if (jam == 17) {
+          pemberianPakan = 2;
+        } else if (jam == 0 && menit == 5) {
+          pemberianPakan = 4;
+        }
+
+        if (pemberianPakan != 0) {
+          if (internetTerhubung) {
+            firebaseSetInt("pemberianPakan", pemberianPakan);
+          }
+          if (pemberianPakan == 1 || pemberianPakan == 2) {
+            int totalPakan = hitungPakan(jumlahIkan);
+            beriPakan(totalPakan);
+          }
+        }
+      }
+}
+
+void connectWiFi() {
+  WiFi.begin(ssid, password);
+  Serial.println("Menghubungkan ke Wi-Fi...");
+  unsigned long startAttemptTime = millis();
+
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 20000) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nTerhubung ke Wi-Fi");
+    configTime(25200, 0, "0.id.pool.ntp.org");
+    internetTerhubung = true;
+  } else {
+    Serial.println("\nGagal terhubung ke Wi-Fi");
+    internetTerhubung = false;
+  }
+}
+
+bool checkInternetConnection() {
+  if (WiFi.status() != WL_CONNECTED) {
+    connectWiFi(); // Reconnect jika terputus
+  }
+  return Ping.ping("www.google.com", 3); // Ping untuk memverifikasi koneksi
+}
+
+void setupFirebase() {
+  config.api_key = API_KEY;
+  if (Firebase.signUp(&config, &auth, "", "")) {
+    Serial.println("Firebase berhasil disiapkan.");
+    signupOK = true;
+  } else {
+    Serial.printf("Gagal setup Firebase: %s\n", config.signer.signupError.message.c_str());
+  }
+}
+
+void parseStartDate(String startAlat) {
+  // Parsing tanggal dari Firebase
+  startAlat.replace("\"", "");
+  startAlat.replace("\\/", "/");
+  startDay = startAlat.substring(0, 2).toInt();
+  startMonth = startAlat.substring(3, 5).toInt();
+  startYear = startAlat.substring(6, 10).toInt();
 }
 
 void beriPakan(int gram) {
@@ -387,6 +407,19 @@ void parseStartDate(String startAlat) {
     startYear = startDate.substring(6, 10).toInt();
 }
 
+int getJumlahIkanFromFirebase() {
+  String jumlahIkanStr = firebaseGetString("jumlahIkan"); // Ambil data dari Firebase
+  if (jumlahIkanStr.length() > 0) {
+    // Hilangkan karakter tambahan seperti backslash (\) dan tanda kutip ganda (")
+    jumlahIkanStr.replace("\\", "");   // Hapus backslash
+    jumlahIkanStr.replace("\"", "");  // Hapus tanda kutip ganda
+
+    // Konversi string yang sudah bersih ke integer
+    return jumlahIkanStr.toInt();
+  }
+  return 100; // Jika gagal, kembalikan nilai default 100
+}
+
 void setupFirebase() {
   // Firebase Setup
   config.api_key = API_KEY;
@@ -417,35 +450,6 @@ void firebaseSetString(String databaseDirectory, String value) {
   Firebase.RTDB.setString(&fbdo, databaseDirectory, value);
 }
 
-void connectWiFi() {
-  // Cek apakah sudah terhubung ke Wi-Fi
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("Sudah terhubung ke Wi-Fi");
-    return;
-  }
-
-  Serial.println("Menghubungkan ke Wi-Fi...");
-  WiFi.begin(ssid, password);
-
-  // Tunggu koneksi
-  int retryCount = 0;
-  while (WiFi.status() != WL_CONNECTED && retryCount < 20) {
-    delay(500);
-    Serial.print(".");
-    retryCount++;
-  }
-
-  // Cek apakah koneksi berhasil
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nTerhubung ke Wi-Fi");
-    Serial.print("IP Address: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("\nGagal terhubung ke Wi-Fi");
-  }
-}
-
-// Fungsi untuk sinkronisasi waktu dengan NTP dan menyimpan ke RTC
 void sinkronisasiWaktu() {
   struct tm timeinfo;
   
@@ -457,19 +461,6 @@ void sinkronisasiWaktu() {
   rtc.adjust(DateTime(timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
                       timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec));
   Serial.println("RTC berhasil disinkronkan ke waktu NTP");
-}
-
-int getJumlahIkanFromFirebase() {
-  String jumlahIkanStr = firebaseGetString("startAlat"); // Ambil data dari Firebase
-  if (jumlahIkanStr.length() > 0) {
-    // Hilangkan karakter tambahan seperti backslash (\) dan tanda kutip ganda (")
-    jumlahIkanStr.replace("\\", "");   // Hapus backslash
-    jumlahIkanStr.replace("\"", "");  // Hapus tanda kutip ganda
-
-    // Konversi string yang sudah bersih ke integer
-    return jumlahIkanStr.toInt();
-  }
-  return 100; // Jika gagal, kembalikan nilai default 100
 }
 
 // Fungsi untuk membaca jarak menggunakan sensor Ultrasonik
