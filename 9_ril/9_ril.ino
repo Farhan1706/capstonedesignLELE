@@ -156,6 +156,7 @@ void jalankanModeOffline(int hariBerjalan, int jam, int menit, int detik) {
               prefs.getInt("startMonth"),
               prefs.getInt("startYear"),
               jumlahIkan);
+  Serial.printf("Waktu Saat Ini: %02d:%02d:%02d\n", jam, menit, detik);
 
   if (detik == 0) {
     if ((jam == 9 && menit == 1) || (jam == 17 && menit == 1)) {
@@ -227,6 +228,8 @@ void jalankanModeOnline(int hariBerjalan, int jam, int menit, int detik) {
               prefs.getInt("startMonth"),
               prefs.getInt("startYear"),
               prefs.getInt("jumlahIkan"));
+        Serial.printf("Waktu Saat Ini: %02d:%02d:%02d\n", jam, menit, detik);
+
       }
 
       if (detik == 0) {
