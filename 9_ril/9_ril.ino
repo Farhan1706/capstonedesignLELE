@@ -122,15 +122,16 @@ void loop() {
   }
 
   // Sinkronisasi RTC jika online
-  if (!modeOffline && internetTerhubung) {
-    sinkronisasiWaktu();
-  }
 
   DateTime now = rtc.now();
   int hariBerjalan = (now - DateTime(startYear, startMonth, startDay)).days();
   int jam = now.hour();
   int menit = now.minute();
   int detik = now.second();
+
+  if (!modeOffline && internetTerhubung && jam == 23 && menit == 30) {
+    sinkronisasiWaktu();
+  }
 
   if (modeOffline) {
     jalankanModeOffline(hariBerjalan, jam, menit, detik);
@@ -162,10 +163,6 @@ void jalankanModeOffline(int hariBerjalan, int jam, int menit, int detik) {
       beriPakan(totalPakan);
     }
   }
-
-  // Simulasi pemberian pakan (tidak menggunakan Firebase)
-  int totalPakan = hitungPakan(jumlahIkan);
-  beriPakan(totalPakan);
 }
 
 void jalankanModeOnline(int hariBerjalan, int jam, int menit, int detik) {
@@ -279,16 +276,6 @@ bool checkInternetConnection() {
     connectWiFi(); // Reconnect jika terputus
   }
   return Ping.ping("www.google.com", 3); // Ping untuk memverifikasi koneksi
-}
-
-void setupFirebase() {
-  config.api_key = API_KEY;
-  if (Firebase.signUp(&config, &auth, "", "")) {
-    Serial.println("Firebase berhasil disiapkan.");
-    signupOK = true;
-  } else {
-    Serial.printf("Gagal setup Firebase: %s\n", config.signer.signupError.message.c_str());
-  }
 }
 
 void beriPakan(int gram) {
