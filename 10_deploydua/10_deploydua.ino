@@ -207,6 +207,7 @@ void jalankanModeOnline(int hariBerjalan, int jam, int menit, int detik) {
 
         // Print the parsed values from Firebase
         Serial.printf("Start Date (from Firebase): %02d/%02d/%04d\n", startDay, startMonth, startYear);
+        Serial.printf("Jarak: %02d cm Ketersediaan: %d%%\n", jarak, stokPakanPersentase);
 
         // Simpan tanggal ke NVS
         prefs.putInt("startDay", startDay);
@@ -485,9 +486,5 @@ int hitungKetersediaanPakan(long jarak) {
 
   // Menghitung ketersediaan pakan berdasarkan jarak
   float ketersediaan = ((25.0 - jarak) / 24.0) * 100;
-  Serial.print("Jarak: ");
-  Serial.print(jarak);
-  Serial.print(" cm, Ketersediaan: ");
-  Serial.println(ketersediaan);
   return (int)ketersediaan;
 }
