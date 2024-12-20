@@ -130,7 +130,7 @@ void loop() {
   // Sinkronisasi RTC jika online
 
   DateTime now = rtc.now();
-  int hariBerjalan = (now - DateTime(startYear, startMonth, startDay)).days();
+  int hariBerjalan = (now - DateTime(startYear, startMonth, startDay)).days()+1;
   int jam = now.hour();
   int menit = now.minute();
   int detik = now.second();
@@ -477,7 +477,7 @@ void kosongkanTempatPakan() {
 
 int hitungPakan(int jumlahIkan) {
   DateTime now = rtc.now();
-  int hariBerjalan = (now - DateTime(startYear, startMonth, startDay)).days();
+  int hariBerjalan = (now - DateTime(startYear, startMonth, startDay)).days()+1;
   float beratIkan = (hariBerjalan <= 10) ? 1 : 
                     (hariBerjalan <= 20) ? 2 : 
                     (hariBerjalan <= 40) ? 3.5 : 
